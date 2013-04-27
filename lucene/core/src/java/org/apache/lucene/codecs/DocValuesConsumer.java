@@ -17,12 +17,6 @@ package org.apache.lucene.codecs;
  * limitations under the License.
  */
 
-import java.io.Closeable;
-import java.io.IOException;
-import java.util.Iterator;
-import java.util.List;
-import java.util.NoSuchElementException;
-
 import org.apache.lucene.index.AtomicReader;
 import org.apache.lucene.index.BinaryDocValues;
 import org.apache.lucene.index.FieldInfo;
@@ -38,6 +32,12 @@ import org.apache.lucene.util.ArrayUtil;
 import org.apache.lucene.util.Bits;
 import org.apache.lucene.util.BytesRef;
 import org.apache.lucene.util.OpenBitSet;
+
+import java.io.Closeable;
+import java.io.IOException;
+import java.util.Iterator;
+import java.util.List;
+import java.util.NoSuchElementException;
 
 /** 
  * Abstract API that consumes numeric, binary and
@@ -605,10 +605,11 @@ public abstract class DocValuesConsumer implements Closeable {
   }
   
   // TODO: seek-by-ord to nextSetBit
-  static class BitsFilteredTermsEnum extends FilteredTermsEnum {
+  public static class BitsFilteredTermsEnum extends FilteredTermsEnum {
+
     final OpenBitSet liveTerms;
     
-    BitsFilteredTermsEnum(TermsEnum in, OpenBitSet liveTerms) {
+    public BitsFilteredTermsEnum(TermsEnum in, OpenBitSet liveTerms) {
       super(in, false); // <-- not passing false here wasted about 3 hours of my time!!!!!!!!!!!!!
       assert liveTerms != null;
       this.liveTerms = liveTerms;

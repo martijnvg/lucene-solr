@@ -17,16 +17,16 @@ package org.apache.lucene.index;
  * limitations under the License.
  */
 
-import java.io.IOException;
-import java.util.Comparator;
-
 import org.apache.lucene.util.Bits;
 import org.apache.lucene.util.BytesRef;
+
+import java.io.IOException;
+import java.util.Comparator;
 
 /** Implements a {@link TermsEnum} wrapping a provided
  * {@link SortedSetDocValues}. */
 
-class SortedSetDocValuesTermsEnum extends TermsEnum {
+public class SortedSetDocValuesTermsEnum extends TermsEnum {
   private final SortedSetDocValues values;
   private long currentOrd = -1;
   private final BytesRef term = new BytesRef();

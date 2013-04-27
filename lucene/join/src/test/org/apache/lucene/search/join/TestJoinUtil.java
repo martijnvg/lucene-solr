@@ -68,6 +68,7 @@ import java.util.TreeSet;
 
 public class TestJoinUtil extends LuceneTestCase {
 
+  @Test
   public void testSimple() throws Exception {
     final String idField = "id";
     final String toField = "productId";
@@ -150,6 +151,7 @@ public class TestJoinUtil extends LuceneTestCase {
     dir.close();
   }
 
+  @Test
   public void testSimpleWithScoring() throws Exception {
     final String idField = "id";
     final String toField = "movieId";
@@ -333,7 +335,7 @@ public class TestJoinUtil extends LuceneTestCase {
           }
         });
         // Asserting bit set...
-        if (VERBOSE) {
+        if (true || VERBOSE) {
           System.out.println("expected cardinality:" + expectedResult.cardinality());
           DocIdSetIterator iterator = expectedResult.iterator();
           for (int doc = iterator.nextDoc(); doc != DocIdSetIterator.NO_MORE_DOCS; doc = iterator.nextDoc()) {
