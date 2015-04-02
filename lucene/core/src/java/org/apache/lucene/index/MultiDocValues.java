@@ -17,12 +17,6 @@ package org.apache.lucene.index;
  * limitations under the License.
  */
 
-import java.io.IOException;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collection;
-import java.util.List;
-
 import org.apache.lucene.index.MultiTermsEnum.TermsEnumIndex;
 import org.apache.lucene.index.MultiTermsEnum.TermsEnumWithSlice;
 import org.apache.lucene.util.Accountable;
@@ -34,6 +28,12 @@ import org.apache.lucene.util.LongValues;
 import org.apache.lucene.util.RamUsageEstimator;
 import org.apache.lucene.util.packed.PackedInts;
 import org.apache.lucene.util.packed.PackedLongValues;
+
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collection;
+import java.util.List;
 
 /**
  * A wrapper for CompositeIndexReader providing access to DocValues.
@@ -374,8 +374,8 @@ public class MultiDocValues {
   /** maps per-segment ordinals to/from global ordinal space */
   // TODO: we could also have a utility method to merge Terms[] and use size() as a weight when we need it
   // TODO: use more efficient packed ints structures?
-  // TODO: pull this out? it's pretty generic (maps between N ord()-enabled TermsEnums) 
-  public static class OrdinalMap implements Accountable {
+  // TODO: pull this out? it's pretty generic (maps between N ord()-enabled TermsEnums)
+  public static class OrdinalMap implements org.apache.lucene.index.OrdinalMap {
 
     private static class SegmentMap implements Accountable {
       private static final long BASE_RAM_BYTES_USED = RamUsageEstimator.shallowSizeOfInstance(SegmentMap.class);
@@ -463,7 +463,7 @@ public class MultiDocValues {
       return build(owner, subs, weights, acceptableOverheadRatio);
     }
 
-    /** 
+    /**
      * Creates an ordinal map that allows mapping ords to/from a merged
      * space from <code>subs</code>.
      * @param owner a cache key
@@ -498,9 +498,9 @@ public class MultiDocValues {
     final SegmentMap segmentMap;
     // ram usage
     final long ramBytesUsed;
-    
+
     OrdinalMap(Object owner, TermsEnum subs[], SegmentMap segmentMap, float acceptableOverheadRatio) throws IOException {
-      // create the ordinal mappings by pulling a termsenum over each sub's 
+      // create the ordinal mappings by pulling a termsenum over each sub's
       // unique terms, and walking a multitermsenum over those
       this.owner = owner;
       this.segmentMap = segmentMap;
@@ -524,7 +524,7 @@ public class MultiDocValues {
       MultiTermsEnum mte = new MultiTermsEnum(slices);
       mte.reset(indexes);
       long globalOrd = 0;
-      while (mte.next() != null) {        
+      while (mte.next() != null) {
         TermsEnumWithSlice matches[] = mte.getMatchArray();
         int firstSegmentIndex = Integer.MAX_VALUE;
         long globalOrdDelta = Long.MAX_VALUE;
@@ -601,7 +601,7 @@ public class MultiDocValues {
       this.ramBytesUsed = ramBytesUsed;
     }
 
-    /** 
+    /**
      * Given a segment number, return a {@link LongValues} instance that maps
      * segment ordinals to global ordinals.
      */
@@ -616,15 +616,15 @@ public class MultiDocValues {
     public long getFirstSegmentOrd(long globalOrd) {
       return globalOrd - globalOrdDeltas.get(globalOrd);
     }
-    
-    /** 
+
+    /**
      * Given a global ordinal, returns the index of the first
      * segment that contains this term.
      */
     public int getFirstSegmentNumber(long globalOrd) {
       return segmentMap.newToOld((int) firstSegments.get(globalOrd));
     }
-    
+
     /**
      * Returns the total number of unique terms in global ord space.
      */
@@ -647,8 +647,8 @@ public class MultiDocValues {
       return resources;
     }
   }
-  
-  /** 
+
+  /**
    * Implements SortedDocValues over n subs, using an OrdinalMap
    * @lucene.internal
    */
