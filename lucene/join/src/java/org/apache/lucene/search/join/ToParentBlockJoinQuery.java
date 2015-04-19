@@ -17,12 +17,6 @@ package org.apache.lucene.search.join;
  * limitations under the License.
  */
 
-import java.io.IOException;
-import java.util.Collection;
-import java.util.Collections;
-import java.util.Locale;
-import java.util.Set;
-
 import org.apache.lucene.index.IndexReader;
 import org.apache.lucene.index.IndexWriter;
 import org.apache.lucene.index.LeafReaderContext;
@@ -33,12 +27,19 @@ import org.apache.lucene.search.Explanation;
 import org.apache.lucene.search.IndexSearcher;
 import org.apache.lucene.search.Query;
 import org.apache.lucene.search.Scorer;
+import org.apache.lucene.search.TwoPhaseIterator;
 import org.apache.lucene.search.Weight;
 import org.apache.lucene.search.grouping.TopGroups;
 import org.apache.lucene.util.ArrayUtil;
 import org.apache.lucene.util.BitDocIdSet;
 import org.apache.lucene.util.BitSet;
 import org.apache.lucene.util.Bits;
+
+import java.io.IOException;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.Locale;
+import java.util.Set;
 
 /**
  * This query requires that you index
@@ -94,6 +95,8 @@ public class ToParentBlockJoinQuery extends Query {
   // query before searching:
   private final Query origChildQuery;
   private final ScoreMode scoreMode;
+  private final int minChildren;
+  private final int maxChildren;
 
   /** Create a ToParentBlockJoinQuery.
    * 
@@ -103,24 +106,41 @@ public class ToParentBlockJoinQuery extends Query {
    * into a single parent score.
    **/
   public ToParentBlockJoinQuery(Query childQuery, BitDocIdSetFilter parentsFilter, ScoreMode scoreMode) {
+    this(childQuery, parentsFilter, scoreMode, 1, Integer.MAX_VALUE);
+  }
+
+  /** Create a ToParentBlockJoinQuery.
+   *
+   * @param childQuery Query matching child documents.
+   * @param parentsFilter Filter identifying the parent documents.
+   * @param scoreMode How to aggregate multiple child scores
+   * @param minChildren The minimum number of matching children documents a parent document needs to have. d
+   * @param maxChildren The maximum number of matching children documents a parent document is amount to have.
+   * into a single parent score.
+   **/
+  public ToParentBlockJoinQuery(Query childQuery, BitDocIdSetFilter parentsFilter, ScoreMode scoreMode, int minChildren, int maxChildren) {
     super();
     this.origChildQuery = childQuery;
     this.childQuery = childQuery;
     this.parentsFilter = parentsFilter;
     this.scoreMode = scoreMode;
+    this.minChildren = minChildren;
+    this.maxChildren = maxChildren;
   }
 
-  private ToParentBlockJoinQuery(Query origChildQuery, Query childQuery, BitDocIdSetFilter parentsFilter, ScoreMode scoreMode) {
+  private ToParentBlockJoinQuery(Query origChildQuery, Query childQuery, BitDocIdSetFilter parentsFilter, ScoreMode scoreMode, int minChildren, int maxChildren) {
     super();
     this.origChildQuery = origChildQuery;
     this.childQuery = childQuery;
     this.parentsFilter = parentsFilter;
     this.scoreMode = scoreMode;
+    this.minChildren = minChildren;
+    this.maxChildren = maxChildren;
   }
 
   @Override
   public Weight createWeight(IndexSearcher searcher, boolean needsScores) throws IOException {
-    return new BlockJoinWeight(this, childQuery.createWeight(searcher, needsScores), parentsFilter, scoreMode);
+    return new BlockJoinWeight(this, childQuery.createWeight(searcher, needsScores), parentsFilter, scoreMode, minChildren, maxChildren);
   }
   
   /** Return our child query. */
@@ -133,13 +153,17 @@ public class ToParentBlockJoinQuery extends Query {
     private final Weight childWeight;
     private final BitDocIdSetFilter parentsFilter;
     private final ScoreMode scoreMode;
+    private final int minChildren;
+    private final int maxChildren;
 
-    public BlockJoinWeight(Query joinQuery, Weight childWeight, BitDocIdSetFilter parentsFilter, ScoreMode scoreMode) {
+    public BlockJoinWeight(Query joinQuery, Weight childWeight, BitDocIdSetFilter parentsFilter, ScoreMode scoreMode, int minChildren, int maxChildren) {
       super(joinQuery);
       this.joinQuery = joinQuery;
       this.childWeight = childWeight;
       this.parentsFilter = parentsFilter;
       this.scoreMode = scoreMode;
+      this.minChildren = minChildren;
+      this.maxChildren = maxChildren;
     }
 
     @Override
@@ -178,7 +202,7 @@ public class ToParentBlockJoinQuery extends Query {
         return null;
       }
 
-      return new BlockJoinScorer(this, childScorer, parents.bits(), firstChildDoc, scoreMode, acceptDocs);
+      return new BlockJoinScorer(this, childScorer, parents.bits(), parents.iterator(), firstChildDoc, scoreMode, acceptDocs, minChildren, maxChildren);
     }
 
     @Override
@@ -194,8 +218,12 @@ public class ToParentBlockJoinQuery extends Query {
   static class BlockJoinScorer extends Scorer {
     private final Scorer childScorer;
     private final BitSet parentBits;
+    private final DocIdSetIterator parentsIterator;
     private final ScoreMode scoreMode;
     private final Bits acceptDocs;
+    private final int minChildren;
+    private final int maxChildren;
+
     private int parentDoc = -1;
     private int prevParentDoc;
     private float parentScore;
@@ -205,14 +233,17 @@ public class ToParentBlockJoinQuery extends Query {
     private float[] pendingChildScores;
     private int childDocUpto;
 
-    public BlockJoinScorer(Weight weight, Scorer childScorer, BitSet parentBits, int firstChildDoc, ScoreMode scoreMode, Bits acceptDocs) {
+    public BlockJoinScorer(Weight weight, Scorer childScorer, BitSet parentBits, DocIdSetIterator parentsIterator, int firstChildDoc, ScoreMode scoreMode, Bits acceptDocs, int minChildren, int maxChildren) {
       super(weight);
       //System.out.println("Q.init firstChildDoc=" + firstChildDoc);
       this.parentBits = parentBits;
+      this.parentsIterator = parentsIterator;
       this.childScorer = childScorer;
       this.scoreMode = scoreMode;
       this.acceptDocs = acceptDocs;
       nextChildDoc = firstChildDoc;
+      this.minChildren = minChildren;
+      this.maxChildren = maxChildren;
     }
 
     @Override
@@ -298,7 +329,6 @@ public class ToParentBlockJoinQuery extends Query {
         childDocUpto = 0;
         parentFreq = 0;
         do {
-
           //System.out.println("  c=" + nextChildDoc);
           if (pendingChildDocs != null && pendingChildDocs.length == childDocUpto) {
             pendingChildDocs = ArrayUtil.grow(pendingChildDocs);
@@ -328,6 +358,10 @@ public class ToParentBlockJoinQuery extends Query {
         // orthogonal:
         if (nextChildDoc == parentDoc) {
           throw new IllegalStateException("child query must only match non-parent docs, but parent docID=" + nextChildDoc + " matched childScorer=" + childScorer.getClass());
+        }
+
+        if (childDocUpto < minChildren || childDocUpto > maxChildren) {
+          continue;
         }
 
         switch(scoreMode) {
@@ -412,6 +446,51 @@ public class ToParentBlockJoinQuery extends Query {
     }
 
     @Override
+    public TwoPhaseIterator asTwoPhaseIterator() {
+      DocIdSetIterator iterator = new DocIdSetIterator() {
+        @Override
+        public int docID() {
+          return parentDoc;
+        }
+
+        @Override
+        public int nextDoc() throws IOException {
+          return parentDoc = parentsIterator.advance(parentDoc + 1);
+        }
+
+        @Override
+        public int advance(int target) throws IOException {
+          return parentDoc = parentsIterator.advance(target);
+        }
+
+        @Override
+        public long cost() {
+          return parentsIterator.cost();
+        }
+      };
+      return new TwoPhaseIterator(iterator) {
+        @Override
+        public boolean matches() throws IOException {
+          if (parentDoc == 0) {
+            return false;
+          }
+          if (nextChildDoc == NO_MORE_DOCS) {
+            //System.out.println("  end");
+            parentDoc = NO_MORE_DOCS;
+          }
+          prevParentDoc = parentBits.prevSetBit(parentDoc - 1);
+          nextChildDoc = childScorer.advance(prevParentDoc);
+          if (nextChildDoc < parentDoc) {
+            nextDoc();
+            return true;
+          } else {
+            return false;
+          }
+        }
+      };
+    }
+
+    @Override
     public long cost() {
       return childScorer.cost();
     }
@@ -439,7 +518,9 @@ public class ToParentBlockJoinQuery extends Query {
       Query rewritten = new ToParentBlockJoinQuery(origChildQuery,
                                 childRewrite,
                                 parentsFilter,
-                                scoreMode);
+                                scoreMode,
+                                minChildren,
+                                maxChildren);
       rewritten.setBoost(getBoost());
       return rewritten;
     } else {
