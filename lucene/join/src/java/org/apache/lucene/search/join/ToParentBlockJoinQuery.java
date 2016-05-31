@@ -196,13 +196,13 @@ public class ToParentBlockJoinQuery extends Query {
     }
   }
 
-  private static class ParentTwoPhase extends TwoPhaseIterator {
+  static class ParentTwoPhase extends TwoPhaseIterator {
 
-    private final ParentApproximation parentApproximation;
+    private final DocIdSetIterator parentApproximation;
     private final DocIdSetIterator childApproximation;
     private final TwoPhaseIterator childTwoPhase;
 
-    ParentTwoPhase(ParentApproximation parentApproximation, TwoPhaseIterator childTwoPhase) {
+    ParentTwoPhase(DocIdSetIterator parentApproximation, TwoPhaseIterator childTwoPhase) {
       super(parentApproximation);
       this.parentApproximation = parentApproximation;
       this.childApproximation = childTwoPhase.approximation();
