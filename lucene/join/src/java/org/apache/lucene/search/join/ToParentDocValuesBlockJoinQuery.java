@@ -112,7 +112,7 @@ public final class ToParentDocValuesBlockJoinQuery extends Query {
               return new BlockJoinScorer(weight, scoreMode, offsetToFirstChildDV, parentIterator, childScorer);
             } else {
               DocIdSetIterator childIterator = childScorer.iterator();
-              return new ConstantScoreScorer(weight, 1f, new DVBlockJoinIterator(parentIterator, childIterator, offsetToFirstChildDV));
+              return new ConstantScoreScorer(weight, 0f, new SeekParentIterator(parentIterator, childIterator, offsetToFirstChildDV));
             }
           }
 
@@ -170,11 +170,11 @@ public final class ToParentDocValuesBlockJoinQuery extends Query {
       this.childTwoPhaseIterator = childScorer.twoPhaseIterator();
       if (this.childTwoPhaseIterator == null) {
         this.childIt = childScorer.iterator();
-        this.parentIterator = new DVBlockJoinIterator(parentIterator, childIt, offsetToFirstChildDV);
+        this.parentIterator = new ParentIterator(parentIterator, childIt, offsetToFirstChildDV);
         this.parentTwoPhase = null;
       } else {
         this.childIt = childTwoPhaseIterator.approximation();
-        this.parentIterator = new DVBlockJoinIterator(parentIterator, childIt, offsetToFirstChildDV);
+        this.parentIterator = new ParentIterator(parentIterator, childIt, offsetToFirstChildDV);
         this.parentTwoPhase = new ToParentBlockJoinQuery.ParentTwoPhase(this.parentIterator, childTwoPhaseIterator);
       }
     }
@@ -219,9 +219,15 @@ public final class ToParentDocValuesBlockJoinQuery extends Query {
       if (childIt.docID() >= parentIterator.docID()) {
         return;
       }
-      int freq = 1;
-      double score = childScorer.score();
-      while (childIt.nextDoc() < parentIterator.docID()) {
+      int freq = 0;
+      double score = 0.0;
+      if (scoreMode == ScoreMode.Min) {
+        score = Float.MAX_VALUE;
+      } else if (scoreMode == ScoreMode.Max) {
+        score = Float.MIN_VALUE;
+      }
+
+      for (; childIt.docID() < parentIterator.docID(); childIt.nextDoc()) {
         if (childTwoPhaseIterator == null || childTwoPhaseIterator.matches()) {
           final float childScore = childScorer.score();
           freq += 1;
@@ -248,51 +254,107 @@ public final class ToParentDocValuesBlockJoinQuery extends Query {
       this.freq = freq;
     }
 
+    final class ParentIterator extends DocIdSetIterator {
+
+      final DocIdSetIterator parentIt;
+      final DocIdSetIterator childIt;
+      final NumericDocValues offsetToFirstChildDV;
+
+      ParentIterator(DocIdSetIterator parentIt, DocIdSetIterator childIt, NumericDocValues offsetToFirstChildDV) throws IOException {
+        this.parentIt = parentIt;
+        this.childIt = childIt;
+        this.offsetToFirstChildDV = offsetToFirstChildDV;
+      }
+
+      @Override
+      public int docID() {
+        return parentIt.docID();
+      }
+
+      @Override
+      public int nextDoc() throws IOException {
+        if (childIt.docID() == NO_MORE_DOCS) {
+          parentIt.advance(NO_MORE_DOCS);
+          return NO_MORE_DOCS;
+        }
+        int target;
+        if (childIt.docID() > parentIt.docID()) {
+          target = childIt.docID();
+        } else {
+          target = childIt.nextDoc();
+        }
+        return parentIt.advance(target);
+      }
+
+      @Override
+      public int advance(int parentTarget) throws IOException {
+        if (parentTarget == NO_MORE_DOCS) {
+          parentIt.advance(parentTarget);
+          return parentIt.advance(parentTarget);
+        }
+
+        boolean advanced = offsetToFirstChildDV.advanceExact(parentTarget);
+        assert advanced : "All parent docs must have an offset field";
+        int firstChildOffset = (int) offsetToFirstChildDV.longValue();
+        int childTarget = parentTarget - firstChildOffset;
+        if (childTarget > childIt.docID()) {
+          childIt.advance(childTarget);
+        }
+        if (childIt.docID() < parentTarget) {
+          return parentIt.advance(parentTarget);
+        } else {
+          return parentIt.advance(childIt.nextDoc());
+        }
+      }
+
+      @Override
+      public long cost() {
+        return childIt.cost() + 1 /* ... + 1 for advanceExact(...) ? */;
+      }
+    }
+
   }
 
-  final class DVBlockJoinIterator extends DocIdSetIterator {
+  // Iterator that just check whether a single child matches and then emits the parent as match.
+  // Sufficient when scoring is not required
+  final class SeekParentIterator extends DocIdSetIterator {
 
     final DocIdSetIterator parentIt;
     final DocIdSetIterator childIt;
     final NumericDocValues offsetToFirstChildDV;
 
-    int parentDocId = -1;
-    int childDocId;
-
-    DVBlockJoinIterator(DocIdSetIterator parentIt, DocIdSetIterator childIt, NumericDocValues offsetToFirstChildDV) throws IOException {
+    SeekParentIterator(DocIdSetIterator parentIt, DocIdSetIterator childIt, NumericDocValues offsetToFirstChildDV) throws IOException {
       this.parentIt = parentIt;
       this.childIt = childIt;
       this.offsetToFirstChildDV = offsetToFirstChildDV;
-      this.childDocId = childIt.nextDoc();
+      childIt.nextDoc();
     }
 
     @Override
     public int docID() {
-      return parentDocId;
+      return parentIt.docID();
     }
 
     @Override
     public int nextDoc() throws IOException {
-      if (childDocId == NO_MORE_DOCS) {
-        return parentDocId = NO_MORE_DOCS;
-      }
-      parentDocId = parentIt.advance(childDocId);
-      childDocId = childIt.advance(parentDocId);
+      int parentDocId = parentIt.advance(childIt.docID());
+      childIt.advance(parentDocId);
       return parentDocId;
     }
 
     @Override
     public int advance(int parentTarget) throws IOException {
       if (parentTarget == NO_MORE_DOCS) {
-        return parentDocId = NO_MORE_DOCS;
+        childIt.advance(NO_MORE_DOCS);
+        return parentIt.advance(NO_MORE_DOCS);
       }
 
       boolean advanced = offsetToFirstChildDV.advanceExact(parentTarget);
       assert advanced : "All parent docs must have an offset field";
       int firstChildOffset = (int) offsetToFirstChildDV.longValue();
       int childTarget = parentTarget - firstChildOffset;
-      if (childTarget > childDocId) {
-        childDocId = childIt.advance(childTarget);
+      if (childTarget > childIt.docID()) {
+        childIt.advance(childTarget);
       }
       return nextDoc();
     }
